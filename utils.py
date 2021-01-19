@@ -1,6 +1,7 @@
 import itertools
 from nmigen import *
 from nmigen.build import *
+from nmigen.lib.fifo import SyncFIFOBuffered
 
 __all__ = ["Sequencer"]
 
@@ -224,4 +225,96 @@ class HexNumber(Elaboratable):
                     else:
                         m.d.sync += self.ascii.eq(ord('A') + self.data - 10)
         
+        return m
+
+class UARTDebugger(Elaboratable):
+    """UART Debugger. Once a symbol comes in over the UART, it records data in a FIFO at sync rate and then sends them over UART.
+    Parameters
+    ----------
+    uart : AsyncSerial
+        UART interface from nmigen_stdio
+    words : int
+        Number of bytes
+    depth : int
+        Number of samples stored in FIFO
+    Attributes
+    ----------
+    data : Signal, in
+        Data to sample
+    """
+    def __init__(self, uart, words, depth, data):
+        assert(len(data) == words * 8)
+        self.uart = uart
+        self.words = words
+        self.depth = depth
+        self.data = data
+
+    def elaborate(self, platform: Platform) -> Module:
+        m = Module()
+
+        uart = self.uart
+        words = self.words
+        depth = self.depth
+        data = self.data
+        word_sel = Signal(range(2 * words), reset = 2 * words - 1)
+        fifo = SyncFIFOBuffered(width=8 * words, depth=depth)
+        m.submodules += fifo
+
+        def sendByteFSM(byte, nextState):
+            sent = Signal(reset=0)
+            with m.If(uart.tx.rdy):
+                with m.If(sent == 0):
+                    m.d.sync += uart.tx.data.eq(byte)
+                    m.d.sync += uart.tx.ack.eq(1)
+                    m.d.sync += sent.eq(1)
+                with m.If(sent == 1):
+                    m.d.sync += uart.tx.ack.eq(0)
+                    m.d.sync += sent.eq(0)
+                    m.next = nextState
+
+        with m.FSM():
+            with m.State("Wait"):
+                m.d.sync += uart.rx.ack.eq(1)
+                with m.If(uart.rx.rdy):
+                    m.d.sync += uart.rx.ack.eq(0)
+                    m.next = "Pre-Collect"
+            with m.State("Pre-Collect"):
+                sendByteFSM(ord('\n'), "Collect")
+            with m.State("Collect"):
+                with m.If(~fifo.w_rdy):
+                    m.d.sync += fifo.w_en.eq(0)
+                    m.next = "Transmit-1"
+                with m.Else():
+                    m.d.sync += fifo.w_en.eq(1)
+                    m.d.sync += fifo.w_data.eq(data)
+            with m.State("Transmit-1"):
+                with m.If(fifo.r_rdy):
+                    m.d.sync += fifo.r_en.eq(1)
+                    m.next = "Transmit-2"
+                with m.Else():
+                    m.next = "Wait"
+            with m.State("Transmit-2"):
+                m.d.sync += fifo.r_en.eq(0)
+                m.next = "TransmitByte"
+            with m.State("TransmitByte"):
+                sent = Signal(reset=0)
+                with m.If(uart.tx.rdy):
+                    with m.If(sent == 0):
+                        hexNumber = HexNumber(fifo.r_data.word_select(word_sel, 4), Signal(8))
+                        m.submodules += hexNumber
+                        m.d.sync += uart.tx.data.eq(hexNumber.ascii)
+                        m.d.sync += uart.tx.ack.eq(1)
+                        m.d.sync += sent.eq(1)
+                    with m.If(sent == 1):
+                        m.d.sync += uart.tx.ack.eq(0)
+                        m.d.sync += sent.eq(0)
+                        with m.If(word_sel == 0):
+                            m.d.sync += word_sel.eq(word_sel.reset)
+                            m.next = "Separator"
+                        with m.Else():
+                            m.d.sync += word_sel.eq(word_sel - 1)
+                with m.Else():
+                    m.d.sync += uart.tx.ack.eq(0)
+            with m.State("Separator"):
+                sendByteFSM(ord('\n'), "Transmit-1")
         return m
