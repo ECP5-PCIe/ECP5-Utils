@@ -3,7 +3,7 @@ from nmigen import *
 from nmigen.build import *
 from nmigen.lib.fifo import AsyncFIFOBuffered
 
-__all__ = ["Sequencer"]
+__all__ = ["Sequencer", "FunctionSequencer", "LFSR", "Resizer", "Rotator", "HexNumber", "UARTDebugger"]
 
 class Sequencer(Elaboratable): # Does signal.eq(value) where values is a 2D array, values[m] being the values for the mth signal and values[m][n] being the values for the mth signal at the nth step. times is the clock cycle number of each occurence
     def __init__(self, signals, values, times=lambda x : x, done=Signal(), reset=Signal()):
@@ -245,7 +245,7 @@ class UARTDebugger(Elaboratable):
         Enable sampling
         
     """
-    def __init__(self, uart, words, depth, data, data_domain="sync", enable=1):
+    def __init__(self, uart, words, depth, data, data_domain="sync", enable=1, timeout=-1):
         assert(len(data) == words * 8)
         self.uart = uart
         self.words = words
@@ -253,6 +253,7 @@ class UARTDebugger(Elaboratable):
         self.data = data
         self.data_domain = data_domain
         self.enable = enable
+        self.timeout = timeout
 
     def elaborate(self, platform: Platform) -> Module:
         m = Module()
@@ -261,6 +262,8 @@ class UARTDebugger(Elaboratable):
         words = self.words
         depth = self.depth
         data = self.data
+        if(self.timeout >= 0):
+            timer = Signal(range(self.timeout + 1), reset=self.timeout)
         word_sel = Signal(range(2 * words), reset = 2 * words - 1)
         fifo = AsyncFIFOBuffered(width=8 * words, depth=depth, r_domain="sync", w_domain=self.data_domain)
         m.submodules += fifo
@@ -278,21 +281,25 @@ class UARTDebugger(Elaboratable):
                     m.d.sync += uart.tx.ack.eq(0)
                     m.d.sync += sent.eq(0)
                     m.next = nextState
-
+        
         with m.FSM():
             with m.State("Wait"):
                 m.d.sync += uart.rx.ack.eq(1)
                 with m.If(uart.rx.rdy):
                     m.d.sync += uart.rx.ack.eq(0)
+                    if self.timeout >= 0:
+                        m.d.sync += timer.eq(self.timeout)
                     m.next = "Pre-Collect"
             with m.State("Pre-Collect"):
                 sendByteFSM(ord('\n'), "Collect")
             with m.State("Collect"):
-                with m.If(~fifo.w_rdy):
+                with m.If(~fifo.w_rdy | ((timer == 0) if self.timeout >= 0 else 0)):
                     m.d.comb += fifo.w_en.eq(0)
                     m.next = "Transmit-1"
                 with m.Else():
                     m.d.comb += fifo.w_en.eq(self.enable)
+                    if self.timeout >= 0:
+                        m.d.sync += timer.eq(timer - 1)
             with m.State("Transmit-1"):
                 with m.If(fifo.r_rdy):
                     m.d.sync += fifo.r_en.eq(1)
