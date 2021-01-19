@@ -154,7 +154,7 @@ def get_ball_desc(pin_data):
         #l3 = '  ▄▀▀▄  '
         #l4 = '▄▀    ▀▄'
         fg = fg_nc
-        fg = bg_nc
+        bg = bg_nc
         lines[0] = '██▄NC▄██'
         lines[1] = ' ▀████▀ '
         lines[2] = ' ▄████▄ '
