@@ -198,3 +198,6 @@ for n in range(max_n):
         print(' {:>2}'.format(ball_name[n + 1]) + ' ' + lines[i] + '██')
 
 print('█' * (10 * max_m + 6))
+print()
+print('Device Name: ' + device_name)
+print('Package: ' + package)
