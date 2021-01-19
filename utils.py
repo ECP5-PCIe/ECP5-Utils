@@ -1,7 +1,7 @@
 import itertools
 from nmigen import *
 from nmigen.build import *
-from nmigen.lib.fifo import SyncFIFOBuffered
+from nmigen.lib.fifo import AsyncFIFOBuffered
 
 __all__ = ["Sequencer"]
 
@@ -237,17 +237,22 @@ class UARTDebugger(Elaboratable):
         Number of bytes
     depth : int
         Number of samples stored in FIFO
-    Attributes
-    ----------
     data : Signal, in
-        Data to sample
+        Data to sample, 8 * words wide
+    data_domain : string
+        Input clock domain
+    enable : Signal, in
+        Enable sampling
+        
     """
-    def __init__(self, uart, words, depth, data):
+    def __init__(self, uart, words, depth, data, data_domain="sync", enable=1):
         assert(len(data) == words * 8)
         self.uart = uart
         self.words = words
         self.depth = depth
         self.data = data
+        self.data_domain = data_domain
+        self.enable = enable
 
     def elaborate(self, platform: Platform) -> Module:
         m = Module()
@@ -257,8 +262,10 @@ class UARTDebugger(Elaboratable):
         depth = self.depth
         data = self.data
         word_sel = Signal(range(2 * words), reset = 2 * words - 1)
-        fifo = SyncFIFOBuffered(width=8 * words, depth=depth)
+        fifo = AsyncFIFOBuffered(width=8 * words, depth=depth, r_domain="sync", w_domain=self.data_domain)
         m.submodules += fifo
+
+        m.d.comb += fifo.w_data.eq(data)
 
         def sendByteFSM(byte, nextState):
             sent = Signal(reset=0)
@@ -282,11 +289,10 @@ class UARTDebugger(Elaboratable):
                 sendByteFSM(ord('\n'), "Collect")
             with m.State("Collect"):
                 with m.If(~fifo.w_rdy):
-                    m.d.sync += fifo.w_en.eq(0)
+                    m.d.comb += fifo.w_en.eq(0)
                     m.next = "Transmit-1"
                 with m.Else():
-                    m.d.sync += fifo.w_en.eq(1)
-                    m.d.sync += fifo.w_data.eq(data)
+                    m.d.comb += fifo.w_en.eq(self.enable)
             with m.State("Transmit-1"):
                 with m.If(fifo.r_rdy):
                     m.d.sync += fifo.r_en.eq(1)
