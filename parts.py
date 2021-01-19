@@ -1,7 +1,5 @@
-import itertools
 from nmigen import *
 from nmigen.build import *
-from utils import FunctionSequencer
 
 
 __all__ = ["PLL", "PLL1Ch"]
@@ -71,13 +69,13 @@ class PLL(Elaboratable):
         m = Module()
         m.submodules += pll
         with m.If(self.clksel == 0):
-            m.d.comb += clkfb.eq(self.clkout1);
+            m.d.comb += clkfb.eq(self.clkout1)
         with m.Elif(self.clksel == 1):
-            m.d.comb += clkfb.eq(self.clkout2);
+            m.d.comb += clkfb.eq(self.clkout2)
         with m.Elif(self.clksel == 2):
-            m.d.comb += clkfb.eq(self.clkout3);
+            m.d.comb += clkfb.eq(self.clkout3)
         with m.Else():
-            m.d.comb += clkfb.eq(self.clkout4);
+            m.d.comb += clkfb.eq(self.clkout4)
         return m
 
 class PLL1Ch(Elaboratable):
